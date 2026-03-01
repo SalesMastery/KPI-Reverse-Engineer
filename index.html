@@ -1,0 +1,548 @@
+import { useState } from "react";
+
+const r    = (n, d = 1) => +n.toFixed(d);
+const fmt  = (n) => isFinite(n) && n >= 0 ? Math.round(n).toLocaleString() : "—";
+const fmtD = (n) => isFinite(n) && n >= 0 ? r(n).toFixed(1) : "—";
+const pct  = (n) => isFinite(n) ? (n * 100).toFixed(0) + "%" : "—";
+const $    = (n) => isFinite(n) && n >= 0 ? "$" + Math.round(n).toLocaleString() : "—";
+
+const MAIN_DEFAULTS = {
+  revenueTarget: 300000, acv: 5000, workingDays: 22,
+  numClosers: 3, numSetters: 2,
+  showRate: 0.70, offerRate: 0.85, closeRate: 0.25, closerFUMult: 0.30,
+  pickUpRate: 0.30, pitchRate: 0.60, bookingRate: 0.40, setterFUMult: 0.25,
+};
+
+const MIND_DEFAULTS = {
+  // shared
+  workingDays: 22,
+  acv: 5000,
+  // closer
+  closerGoal: 30000,
+  showRate: 0.70, offerRate: 0.85, closeRate: 0.25,
+  // setter
+  setterGoal: 8000,
+  commPerBooking: 50,   // $ per booking they get
+  pickUpRate: 0.30, pitchRate: 0.60, bookingRate: 0.40,
+};
+
+const TABS = [
+  { key: "funnel", label: "Full Funnel"   },
+  { key: "setter", label: "Setter KPIs"  },
+  { key: "closer", label: "Closer KPIs"  },
+  { key: "mind",   label: "MIND Sheet"   },
+  { key: "review", label: "Weekly Review"},
+];
+
+const C = {
+  bg: "#080808", surface: "#0f0f0f", border: "#1c1c1c", muted: "#3a3a3a",
+  text: "#e8e8e8", sub: "#555", amber: "#F0A500", green: "#22C55E",
+  red: "#EF4444", blue: "#4A9EFF", purple: "#A855F7",
+};
+
+// ─── shared tiny components ─────────────────────────────────────────────────
+
+function Slider({ label, value, min, max, step, onChange, format, accentColor }) {
+  const p = ((value - min) / (max - min)) * 100;
+  const accent = accentColor || C.amber;
+  return (
+    <div style={{ marginBottom: 13 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+        <span style={{ fontSize: 10, color: C.sub, textTransform: "uppercase", letterSpacing: "0.1em" }}>{label}</span>
+        <span style={{ fontSize: 11, color: accent, fontWeight: 700 }}>{format ? format(value) : value}</span>
+      </div>
+      <input type="range" min={min} max={max} step={step} value={value}
+        onChange={e => onChange(Number(e.target.value))}
+        style={{ width: "100%", height: 3, appearance: "none", cursor: "pointer", outline: "none", borderRadius: 2,
+          background: `linear-gradient(to right,${accent} 0%,${accent} ${p}%,${C.muted} ${p}%,${C.muted} 100%)` }} />
+    </div>
+  );
+}
+
+function SL({ color, children }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 7, margin: "18px 0 10px" }}>
+      <div style={{ width: 2, height: 12, background: color || C.amber, borderRadius: 1 }} />
+      <span style={{ fontSize: 10, color: C.sub, textTransform: "uppercase", letterSpacing: "0.12em" }}>{children}</span>
+    </div>
+  );
+}
+
+function Card({ label, value, sub, color, big }) {
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 5, padding: "12px 14px" }}>
+      <div style={{ fontSize: 10, color: C.sub, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: big ? 26 : 20, fontFamily: "'Bebas Neue', cursive", color: color || C.text, lineHeight: 1 }}>{value}</div>
+      {sub && <div style={{ fontSize: 10, color: C.sub, marginTop: 3 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function FRow({ label, formula, mo, day, perRep, repUnit, color, arrow }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "190px 1fr 100px 140px", alignItems: "center",
+      borderBottom: `1px solid ${C.border}`, padding: "9px 0", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+        {arrow && <span style={{ color: C.muted, fontSize: 11, marginTop: 1 }}>↓</span>}
+        <div>
+          <div style={{ fontSize: 12, color: C.text }}>{label}</div>
+          {formula && <div style={{ fontSize: 10, color: C.sub, marginTop: 1 }}>{formula}</div>}
+        </div>
+      </div>
+      <div style={{ fontSize: 20, fontFamily: "'Bebas Neue', cursive", color: color || C.text }}>{mo}</div>
+      <div style={{ fontSize: 13, fontFamily: "'Bebas Neue', cursive", color: C.sub }}>{day}</div>
+      <div style={{ fontSize: 13, fontFamily: "'Bebas Neue', cursive", color: color || C.sub }}>
+        {perRep}{repUnit && <span style={{ fontSize: 10, color: C.sub }}> {repUnit}</span>}
+      </div>
+    </div>
+  );
+}
+
+function ConvChain({ rows }) {
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 5, overflow: "hidden" }}>
+      {rows.map((row, i) => (
+        <div key={i} style={{ display: "flex", alignItems: "center", padding: "11px 14px",
+          borderBottom: i < rows.length - 1 ? `1px solid ${C.border}` : "none", gap: 10 }}>
+          <span style={{ fontSize: 11, color: C.text, width: 130 }}>{row.from}</span>
+          <span style={{ color: C.muted, fontSize: 11 }}>→</span>
+          <span style={{ fontSize: 11, color: C.text, width: 140 }}>{row.to}</span>
+          <div style={{ flex: 1, height: 5, background: C.bg, borderRadius: 3, overflow: "hidden" }}>
+            <div style={{ width: `${row.rate * 100}%`, height: "100%", background: row.color, borderRadius: 3, transition: "width .3s" }} />
+          </div>
+          <span style={{ fontSize: 15, fontFamily: "'Bebas Neue', cursive", color: row.color, width: 44, textAlign: "right" }}>{pct(row.rate)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── MIND sheet table ────────────────────────────────────────────────────────
+function MindTable({ title, color, rows, goal, goalLabel }) {
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${color}`, borderRadius: 5, overflow: "hidden", marginBottom: 20 }}>
+      {/* title bar */}
+      <div style={{ padding: "10px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", background: `${color}08` }}>
+        <span style={{ fontSize: 10, color, textTransform: "uppercase", letterSpacing: "0.14em" }}>{title}</span>
+        <span style={{ fontSize: 13, fontFamily: "'Bebas Neue', cursive", color }}>{goalLabel}: {goal}</span>
+      </div>
+      {/* header */}
+      <div style={{ display: "grid", gridTemplateColumns: "24px 1fr 110px 90px 120px", gap: 10, padding: "7px 14px", borderBottom: `1px solid ${C.border}` }}>
+        {["#","Metric","Monthly","/ Day","Formula"].map(h => (
+          <span key={h} style={{ fontSize: 9, color: C.sub, textTransform: "uppercase", letterSpacing: "0.1em" }}>{h}</span>
+        ))}
+      </div>
+      {/* rows */}
+      {rows.map((row, i) => (
+        <div key={i} style={{ display: "grid", gridTemplateColumns: "24px 1fr 110px 90px 120px", gap: 10,
+          padding: "10px 14px", borderBottom: i < rows.length - 1 ? `1px solid ${C.border}` : "none", alignItems: "center" }}>
+          <span style={{ fontSize: 9, color: C.muted }}>{String(i + 1).padStart(2,"0")}</span>
+          <span style={{ fontSize: 12, color: C.text }}>{row.label}</span>
+          <span style={{ fontSize: 17, fontFamily: "'Bebas Neue', cursive", color: row.color || color }}>{row.mo}</span>
+          <span style={{ fontSize: 13, fontFamily: "'Bebas Neue', cursive", color: C.sub }}>{row.day}<span style={{ fontSize: 9 }}>/day</span></span>
+          <span style={{ fontSize: 10, color: C.sub, lineHeight: 1.4 }}>{row.formula}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── LEVERS ──────────────────────────────────────────────────────────────────
+const LEVERS = [
+  { key: "dials",   label: "Low Dials",         color: C.blue,   tip: "Block a daily 2-hour dial sprint. Add 20 cold dials/rep/day. Track start time, not just volume." },
+  { key: "pickup",  label: "Low Pick-Up Rate",   color: C.blue,   tip: "Test different caller IDs. Call at 8am, 12pm, 5:30pm windows. Use local numbers for local leads." },
+  { key: "pitch",   label: "Low Pitch Rate",     color: C.blue,   tip: "Retrain on the 2-sentence hook. The first 10 seconds decide everything — drill it in daily roleplay." },
+  { key: "booking", label: "Low Booking Rate",   color: C.amber,  tip: "Roleplay booking objections daily. Add urgency: 'My closer has 2 spots left this week — want one?'" },
+  { key: "noshow",  label: "High No-Shows",      color: C.red,    tip: "3-touch confirm: call 24h before · SMS 2h before · call 10 min before. Never skip a step." },
+  { key: "offer",   label: "Low Offer Rate",     color: C.purple, tip: "Pre-frame every call: 'If this is a fit, I'll share what that looks like.' Re-qualify before pitching." },
+  { key: "close",   label: "Low Close Rate",     color: C.red,    tip: "Drill top 3 objections in roleplay every day. Review last 5 lost calls — find the exact breaking point." },
+  { key: "acv",     label: "Low ACV",            color: C.green,  tip: "Always attempt full-pay first. Never lead with a payment plan. Anchor on transformation, then price." },
+];
+
+// ─── MAIN APP ────────────────────────────────────────────────────────────────
+export default function App() {
+  const [s, setS]       = useState(MAIN_DEFAULTS);
+  const [m, setM]       = useState(MIND_DEFAULTS);
+  const [tab, setTab]   = useState("funnel");
+  const [levers, setLevers] = useState([]);
+
+  const set  = k => v => setS(p => ({ ...p, [k]: v }));
+  const setMind = k => v => setM(p => ({ ...p, [k]: v }));
+
+  // ── MAIN funnel calcs ──────────────────────────────────────────────────────
+  const closes        = s.revenueTarget / s.acv;
+  const offersNeeded  = closes / s.closeRate;
+  const callTaken     = offersNeeded / s.offerRate;
+  const callsBooked   = callTaken / s.showRate;
+  const noShows       = callsBooked - callTaken;
+  const closerFU      = offersNeeded * s.closerFUMult;
+  const proposedCalls = callsBooked / s.bookingRate;
+  const setterFU      = proposedCalls * s.setterFUMult;
+  const pickUps       = proposedCalls / s.pitchRate;
+  const dials         = pickUps / s.pickUpRate;
+
+  const D  = v => v / s.workingDays;
+  const PC = v => v / s.numClosers;
+  const PS = v => v / s.numSetters;
+
+  // ── MIND closer calcs (independent) ───────────────────────────────────────
+  const mc_closes  = m.closerGoal / m.acv;
+  const mc_offers  = mc_closes / m.closeRate;
+  const mc_taken   = mc_offers / m.offerRate;
+  const mc_booked  = mc_taken / m.showRate;
+  const MD = v => v / m.workingDays;
+
+  // ── MIND setter calcs (independent) ───────────────────────────────────────
+  // setter earns commPerBooking per booking — reverse to bookings needed
+  const ms_bookings  = m.setterGoal / m.commPerBooking;
+  const ms_proposed  = ms_bookings / m.bookingRate;
+  const ms_pickups   = ms_proposed / m.pitchRate;
+  const ms_dials     = ms_pickups / m.pickUpRate;
+
+  const toggleL = k => setLevers(p => p.includes(k) ? p.filter(x => x !== k) : [...p, k]);
+
+  // ── CLOSER MIND rows ───────────────────────────────────────────────────────
+  const closerMindRows = [
+    { label: "Cash Target (OTE / Goal)", mo: $(m.closerGoal),       day: $(MD(m.closerGoal)),    formula: "personal goal",                        color: C.purple },
+    { label: "Closes Needed",            mo: fmtD(mc_closes),       day: fmtD(MD(mc_closes)),    formula: `goal ÷ ${$(m.acv)} ACV`,               color: C.purple },
+    { label: "Offers to Propose",        mo: fmtD(mc_offers),       day: fmtD(MD(mc_offers)),    formula: `closes ÷ ${pct(m.closeRate)} close`,   color: C.amber  },
+    { label: "Calls to Take (Shows)",    mo: fmtD(mc_taken),        day: fmtD(MD(mc_taken)),     formula: `offers ÷ ${pct(m.offerRate)} offer`,   color: C.amber  },
+    { label: "Calls to Book",            mo: fmtD(mc_booked),       day: fmtD(MD(mc_booked)),    formula: `taken ÷ ${pct(m.showRate)} show rate`, color: C.green  },
+  ];
+
+  // ── SETTER MIND rows ───────────────────────────────────────────────────────
+  const setterMindRows = [
+    { label: "Income Target",            mo: $(m.setterGoal),       day: $(MD(m.setterGoal)),    formula: "personal goal",                           color: C.blue   },
+    { label: "Bookings Needed",          mo: fmt(ms_bookings),      day: fmtD(MD(ms_bookings)),  formula: `goal ÷ ${$(m.commPerBooking)}/booking`,   color: C.blue   },
+    { label: "Proposed Calls Needed",    mo: fmtD(ms_proposed),     day: fmtD(MD(ms_proposed)),  formula: `bookings ÷ ${pct(m.bookingRate)} rate`,   color: C.amber  },
+    { label: "Pick Ups Needed",          mo: fmtD(ms_pickups),      day: fmtD(MD(ms_pickups)),   formula: `proposed ÷ ${pct(m.pitchRate)} pitch`,    color: C.amber  },
+    { label: "Dials Needed",             mo: fmt(ms_dials),         day: fmtD(MD(ms_dials)),     formula: `pick-ups ÷ ${pct(m.pickUpRate)} pick-up`, color: C.green  },
+  ];
+
+  return (
+    <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "monospace", display: "flex", flexDirection: "column" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap');
+        input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:${C.amber};cursor:pointer;border:2px solid ${C.bg}}
+        *{box-sizing:border-box}
+        ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-thumb{background:${C.muted}}
+        .tb{background:none;border:none;cursor:pointer;font-family:monospace;font-size:11px;text-transform:uppercase;letter-spacing:.1em;padding:11px 16px;border-bottom:2px solid transparent;transition:all .15s}
+        .tb:hover{color:${C.amber} !important}
+        .lb{background:none;border:1px solid ${C.border};border-radius:4px;padding:8px 12px;cursor:pointer;font-family:monospace;font-size:11px;text-align:left;transition:all .15s;width:100%}
+        .lb:hover{border-color:${C.muted}}
+      `}</style>
+
+      {/* ── HEADER ── */}
+      <div style={{ borderBottom: `1px solid ${C.border}`, padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
+        <div>
+          <div style={{ fontSize: 9, color: C.sub, letterSpacing: "0.2em", textTransform: "uppercase", marginBottom: 1 }}>Reverse KPI Engine</div>
+          <div style={{ fontSize: 20, fontFamily: "'Bebas Neue', cursive", letterSpacing: "0.04em" }}>
+            SETTER & CLOSER <span style={{ color: C.amber }}>DASHBOARD</span>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 28 }}>
+          {[
+            { label: "Revenue Target", val: $(s.revenueTarget), color: C.amber },
+            { label: "Closes Needed",  val: fmt(closes),        color: C.green },
+            { label: "Total Dials",    val: fmt(dials),          color: C.blue  },
+          ].map(({ label, val, color }) => (
+            <div key={label} style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 9, color: C.sub, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 1 }}>{label}</div>
+              <div style={{ fontSize: 22, fontFamily: "'Bebas Neue', cursive", color, lineHeight: 1 }}>{val}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── TABS ── */}
+      <div style={{ borderBottom: `1px solid ${C.border}`, display: "flex", flexShrink: 0 }}>
+        {TABS.map(t => (
+          <button key={t.key} className="tb" onClick={() => setTab(t.key)}
+            style={{ color: tab === t.key ? C.amber : C.sub, borderBottom: `2px solid ${tab === t.key ? C.amber : "transparent"}` }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+
+        {/* ── LEFT PANEL — switches between main sliders and MIND sliders ── */}
+        <div style={{ width: 264, borderRight: `1px solid ${C.border}`, padding: "16px 16px", overflowY: "auto", flexShrink: 0 }}>
+
+          {tab !== "mind" ? (
+            /* ── MAIN SLIDERS ── */
+            <>
+              <SL color={C.amber}>Goal</SL>
+              <Slider label="Revenue Target / mo" value={s.revenueTarget} min={10000} max={2000000} step={5000} onChange={set("revenueTarget")} format={$} />
+              <Slider label="Avg Cash / Deal (ACV)" value={s.acv} min={500} max={50000} step={250} onChange={set("acv")} format={$} />
+              <Slider label="Working Days / mo" value={s.workingDays} min={10} max={30} step={1} onChange={set("workingDays")} />
+
+              <SL color={C.green}>Closer Rates</SL>
+              <Slider label="Show Rate" value={s.showRate} min={0.1} max={0.99} step={0.01} onChange={set("showRate")} format={pct} />
+              <Slider label="Offer Rate" value={s.offerRate} min={0.3} max={1.0} step={0.01} onChange={set("offerRate")} format={pct} />
+              <Slider label="Close Rate" value={s.closeRate} min={0.05} max={0.80} step={0.01} onChange={set("closeRate")} format={pct} />
+              <Slider label="Follow-Up Mult (of offers)" value={s.closerFUMult} min={0} max={1.0} step={0.05} onChange={set("closerFUMult")} format={pct} />
+
+              <SL color={C.blue}>Setter Rates</SL>
+              <Slider label="Pick-Up Rate" value={s.pickUpRate} min={0.05} max={0.80} step={0.01} onChange={set("pickUpRate")} format={pct} />
+              <Slider label="Pitch Rate" value={s.pitchRate} min={0.1} max={1.0} step={0.01} onChange={set("pitchRate")} format={pct} />
+              <Slider label="Booking Rate" value={s.bookingRate} min={0.05} max={0.90} step={0.01} onChange={set("bookingRate")} format={pct} />
+              <Slider label="Follow-Up Mult (of proposed)" value={s.setterFUMult} min={0} max={1.0} step={0.05} onChange={set("setterFUMult")} format={pct} />
+
+              <SL color={C.purple}>Team</SL>
+              <Slider label="# Closers" value={s.numClosers} min={1} max={20} step={1} onChange={set("numClosers")} />
+              <Slider label="# Setters" value={s.numSetters} min={1} max={20} step={1} onChange={set("numSetters")} />
+            </>
+          ) : (
+            /* ── MIND SHEET SLIDERS (independent) ── */
+            <>
+              <div style={{ fontSize: 9, color: C.purple, textTransform: "uppercase", letterSpacing: "0.15em", padding: "6px 8px", background: `${C.purple}10`, border: `1px solid ${C.purple}30`, borderRadius: 4, marginBottom: 14, textAlign: "center" }}>
+                MIND Sheet — Independent Inputs
+              </div>
+
+              <SL color={C.muted}>Shared</SL>
+              <Slider label="Working Days / mo" value={m.workingDays} min={10} max={30} step={1} onChange={setMind("workingDays")} accentColor={C.purple} />
+              <Slider label="ACV (closer)" value={m.acv} min={500} max={50000} step={250} onChange={setMind("acv")} format={$} accentColor={C.purple} />
+
+              <SL color={C.purple}>Closer</SL>
+              <Slider label="Closer Income Goal / OTE" value={m.closerGoal} min={1000} max={150000} step={500} onChange={setMind("closerGoal")} format={$} accentColor={C.purple} />
+              <Slider label="Show Rate" value={m.showRate} min={0.1} max={0.99} step={0.01} onChange={setMind("showRate")} format={pct} accentColor={C.purple} />
+              <Slider label="Offer Rate" value={m.offerRate} min={0.3} max={1.0} step={0.01} onChange={setMind("offerRate")} format={pct} accentColor={C.purple} />
+              <Slider label="Close Rate" value={m.closeRate} min={0.05} max={0.80} step={0.01} onChange={setMind("closeRate")} format={pct} accentColor={C.purple} />
+
+              <SL color={C.blue}>Setter</SL>
+              <Slider label="Setter Income Goal" value={m.setterGoal} min={500} max={50000} step={250} onChange={setMind("setterGoal")} format={$} accentColor={C.blue} />
+              <Slider label="Commission / Booking ($)" value={m.commPerBooking} min={5} max={500} step={5} onChange={setMind("commPerBooking")} format={$} accentColor={C.blue} />
+              <Slider label="Pick-Up Rate" value={m.pickUpRate} min={0.05} max={0.80} step={0.01} onChange={setMind("pickUpRate")} format={pct} accentColor={C.blue} />
+              <Slider label="Pitch Rate" value={m.pitchRate} min={0.1} max={1.0} step={0.01} onChange={setMind("pitchRate")} format={pct} accentColor={C.blue} />
+              <Slider label="Booking Rate" value={m.bookingRate} min={0.05} max={0.90} step={0.01} onChange={setMind("bookingRate")} format={pct} accentColor={C.blue} />
+            </>
+          )}
+        </div>
+
+        {/* ── RIGHT PANEL ── */}
+        <div style={{ flex: 1, overflowY: "auto", padding: "18px 24px" }}>
+
+          {/* ═══ FULL FUNNEL ═══ */}
+          {tab === "funnel" && (<>
+            <div style={{ display: "grid", gridTemplateColumns: "190px 1fr 100px 140px", gap: 10, paddingBottom: 8, borderBottom: `1px solid ${C.border}` }}>
+              {["Metric","Monthly","/ Day","/ Rep / Day"].map(h => (
+                <span key={h} style={{ fontSize: 10, color: C.sub, textTransform: "uppercase", letterSpacing: "0.1em" }}>{h}</span>
+              ))}
+            </div>
+            <div style={{ margin: "14px 0 6px" }}>
+              <span style={{ fontSize: 9, color: C.blue, textTransform: "uppercase", letterSpacing: "0.15em", padding: "3px 8px", background: "#0a0e14", border: `1px solid #1a2535`, borderRadius: 3 }}>◆ Setter Funnel</span>
+            </div>
+            <FRow label="Dials"              formula={`pick-ups ÷ ${pct(s.pickUpRate)} pick-up rate`} mo={fmt(dials)}         day={fmtD(D(dials))}         perRep={fmtD(D(PS(dials)))}         repUnit="/setter" color={C.blue} />
+            <FRow label="Pick Ups"           formula={`proposed ÷ ${pct(s.pitchRate)} pitch rate`}   mo={fmt(pickUps)}       day={fmtD(D(pickUps))}       perRep={fmtD(D(PS(pickUps)))}       repUnit="/setter" color={C.blue}  arrow />
+            <FRow label="Proposed Calls"     formula={`booked ÷ ${pct(s.bookingRate)} booking rate`} mo={fmt(proposedCalls)} day={fmtD(D(proposedCalls))} perRep={fmtD(D(PS(proposedCalls)))} repUnit="/setter" color={C.blue}  arrow />
+            <FRow label="Follow Ups (setter)"formula={`${pct(s.setterFUMult)} × proposed`}          mo={fmt(setterFU)}      day={fmtD(D(setterFU))}      perRep={fmtD(D(PS(setterFU)))}      repUnit="/setter" color="#7AB8FF" arrow />
+            <FRow label="Calls Booked"       formula="handoff to closers"                            mo={fmt(callsBooked)}   day={fmtD(D(callsBooked))}   perRep={fmtD(D(PS(callsBooked)))}   repUnit="/setter" color={C.amber} arrow />
+            <div style={{ margin: "18px 0 6px" }}>
+              <span style={{ fontSize: 9, color: C.green, textTransform: "uppercase", letterSpacing: "0.15em", padding: "3px 8px", background: "#080f0a", border: `1px solid #152010`, borderRadius: 3 }}>◆ Closer Funnel</span>
+            </div>
+            <FRow label="Calls Taken (Shows)"formula={`booked × ${pct(s.showRate)} show rate`}      mo={fmt(callTaken)}     day={fmtD(D(callTaken))}     perRep={fmtD(D(PC(callTaken)))}     repUnit="/closer" color={C.green} />
+            <FRow label="No Shows"           formula={`${fmt(callsBooked)} booked − ${fmt(callTaken)} shown`} mo={fmt(noShows)} day={fmtD(D(noShows))} perRep={fmtD(D(PC(noShows)))}    repUnit="/closer" color={C.red}   arrow />
+            <FRow label="Offers Proposed"    formula={`taken × ${pct(s.offerRate)} offer rate`}     mo={fmt(offersNeeded)}  day={fmtD(D(offersNeeded))}  perRep={fmtD(D(PC(offersNeeded)))}  repUnit="/closer" color={C.green} arrow />
+            <FRow label="Follow Ups (closer)"formula={`${pct(s.closerFUMult)} × offers`}            mo={fmt(closerFU)}      day={fmtD(D(closerFU))}      perRep={fmtD(D(PC(closerFU)))}      repUnit="/closer" color="#6BCB8E" arrow />
+            <FRow label="Closes"             formula={`offers × ${pct(s.closeRate)} close rate`}    mo={fmt(closes)}        day={fmtD(D(closes))}        perRep={fmtD(D(PC(closes)))}        repUnit="/closer" color={C.amber} arrow />
+            <FRow label="Cash Revenue"       formula={`${fmt(closes)} closes × ${$(s.acv)} ACV`}   mo={$(s.revenueTarget)} day={$(D(s.revenueTarget))}  perRep={$(D(PC(s.revenueTarget)))}  repUnit="/closer" color={C.amber} arrow />
+          </>)}
+
+          {/* ═══ SETTER KPIs ═══ */}
+          {tab === "setter" && (<>
+            <SL color={C.blue}>Monthly Team Totals — Setters</SL>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8 }}>
+              <Card label="Dials"          value={fmt(dials)}         sub={fmtD(D(dials)) + "/day"}          color={C.blue} />
+              <Card label="Pick Ups"       value={fmt(pickUps)}       sub={fmtD(D(pickUps)) + "/day"}        color={C.blue} />
+              <Card label="Proposed Calls" value={fmt(proposedCalls)} sub={fmtD(D(proposedCalls)) + "/day"}  color={C.blue} />
+              <Card label="Follow Ups"     value={fmt(setterFU)}      sub={fmtD(D(setterFU)) + "/day"}       color="#7AB8FF" />
+              <Card label="Calls Booked"   value={fmt(callsBooked)}   sub={fmtD(D(callsBooked)) + "/day"}    color={C.amber} big />
+            </div>
+            <SL color={C.blue}>Per Setter / Day &nbsp;({s.numSetters} setters · {s.workingDays} days)</SL>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8 }}>
+              {[
+                { l:"Dials",       v:D(PS(dials)) },
+                { l:"Pick Ups",    v:D(PS(pickUps)) },
+                { l:"Proposed",    v:D(PS(proposedCalls)) },
+                { l:"Follow Ups",  v:D(PS(setterFU)) },
+                { l:"Calls Booked",v:D(PS(callsBooked)), c:C.amber },
+              ].map(({ l, v, c }) => <Card key={l} label={l} value={fmtD(v)} color={c || C.blue} />)}
+            </div>
+            <SL color={C.blue}>Setter Conversion Chain</SL>
+            <ConvChain rows={[
+              { from:"Dials",       to:"Pick Ups",      rate:s.pickUpRate,  color:C.blue  },
+              { from:"Pick Ups",    to:"Proposed Calls",rate:s.pitchRate,   color:C.blue  },
+              { from:"Proposed",    to:"Calls Booked",  rate:s.bookingRate, color:C.amber },
+            ]} />
+            <SL color={C.amber}>Setter Efficiency</SL>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+              <Card label="Dials per Booking"    value={fmtD(dials / callsBooked) + "x"}  sub="dials to get 1 booking"       color={C.amber} />
+              <Card label="Dials per Pick Up"    value={fmtD(1 / s.pickUpRate) + "x"}     sub="avg dials to get answered"    color={C.blue}  />
+              <Card label="Pick Ups per Booking" value={fmtD(pickUps / callsBooked) + "x"} sub="conversations to book 1"    color={C.blue}  />
+            </div>
+          </>)}
+
+          {/* ═══ CLOSER KPIs ═══ */}
+          {tab === "closer" && (<>
+            <SL color={C.green}>Monthly Team Totals — Closers</SL>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+              <Card label="Calls Taken (Shows)" value={fmt(callTaken)}    sub={fmtD(D(callTaken)) + "/day"}    color={C.green} />
+              <Card label="No Shows"            value={fmt(noShows)}      sub={fmtD(D(noShows)) + "/day"}      color={C.red}   />
+              <Card label="Offers Proposed"     value={fmt(offersNeeded)} sub={fmtD(D(offersNeeded)) + "/day"} color={C.green} />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 8 }}>
+              <Card label="Follow Ups"   value={fmt(closerFU)}       sub={fmtD(D(closerFU)) + "/day"}       color="#6BCB8E" />
+              <Card label="Closes"       value={fmt(closes)}         sub={fmtD(D(closes)) + "/day"}         color={C.amber} big />
+              <Card label="Cash Revenue" value={$(s.revenueTarget)}  sub={$(D(s.revenueTarget)) + "/day"}   color={C.amber} big />
+            </div>
+            <SL color={C.green}>Per Closer / Day &nbsp;({s.numClosers} closers · {s.workingDays} days)</SL>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8 }}>
+              {[
+                { l:"Calls Taken",v:D(PC(callTaken)) },
+                { l:"No Shows",   v:D(PC(noShows)),    c:C.red   },
+                { l:"Offers",     v:D(PC(offersNeeded)) },
+                { l:"Follow Ups", v:D(PC(closerFU)) },
+                { l:"Closes",     v:D(PC(closes)),     c:C.amber },
+              ].map(({ l, v, c }) => <Card key={l} label={l} value={fmtD(v)} color={c || C.green} />)}
+            </div>
+            <SL color={C.green}>Closer Conversion Chain</SL>
+            <ConvChain rows={[
+              { from:"Calls Booked",   to:"Calls Taken",     rate:s.showRate,   color:C.green },
+              { from:"Calls Taken",    to:"Offers Proposed", rate:s.offerRate,  color:C.green },
+              { from:"Offers Proposed",to:"Closes",          rate:s.closeRate,  color:C.amber },
+            ]} />
+            <SL color={C.red}>No-Show Cost Analysis</SL>
+            <div style={{ background: C.surface, border: `1px solid #2a1010`, borderRadius: 5, padding: 14, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
+              <div>
+                <div style={{ fontSize: 9, color: C.sub, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 3 }}>No-Shows / Month</div>
+                <div style={{ fontSize: 24, fontFamily: "'Bebas Neue', cursive", color: C.red }}>{fmt(noShows)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 9, color: C.sub, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 3 }}>Revenue Lost</div>
+                <div style={{ fontSize: 24, fontFamily: "'Bebas Neue', cursive", color: C.red }}>{$(noShows * s.offerRate * s.closeRate * s.acv)}</div>
+                <div style={{ fontSize: 10, color: C.sub }}>at current rates</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 9, color: C.red, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 6 }}>Fix: 3-Touch Confirm</div>
+                <div style={{ fontSize: 11, color: C.text, lineHeight: 1.7 }}>📞 Call 24h before<br />💬 SMS 2h before<br />📞 Call 10 min before</div>
+              </div>
+            </div>
+          </>)}
+
+          {/* ═══ MIND SHEET ═══ */}
+          {tab === "mind" && (<>
+            <div style={{ display: "flex", gap: 10, marginBottom: 20, padding: "10px 14px", background: `${C.purple}08`, border: `1px solid ${C.purple}25`, borderRadius: 5 }}>
+              <span style={{ fontSize: 11, color: C.sub, lineHeight: 1.6 }}>
+                The MIND Sheet (Most Important Number Drivers) reverse-engineers each rep's personal income goal into exact daily targets.
+                Sliders on the left are <span style={{ color: C.purple }}>independent</span> — change them without affecting the team funnel.
+              </span>
+            </div>
+
+            {/* CLOSER MIND */}
+            <MindTable
+              title="Closer — MIND Sheet"
+              color={C.purple}
+              goal={$(m.closerGoal)}
+              goalLabel="Goal / OTE"
+              rows={closerMindRows}
+            />
+
+            {/* CLOSER rate summary */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 24 }}>
+              <Card label="Show Rate"  value={pct(m.showRate)}   sub="booked → shown"   color={C.green}  />
+              <Card label="Offer Rate" value={pct(m.offerRate)}  sub="shown → pitched"  color={C.green}  />
+              <Card label="Close Rate" value={pct(m.closeRate)}  sub="pitched → closed" color={C.amber}  />
+              <Card label="ACV"        value={$(m.acv)}          sub="avg cash/deal"    color={C.amber}  />
+            </div>
+
+            {/* SETTER MIND */}
+            <MindTable
+              title="Setter — MIND Sheet"
+              color={C.blue}
+              goal={$(m.setterGoal)}
+              goalLabel="Income Goal"
+              rows={setterMindRows}
+            />
+
+            {/* SETTER rate summary */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+              <Card label="Comm / Booking"  value={$(m.commPerBooking)} sub="$ earned per booking" color={C.blue}  />
+              <Card label="Pick-Up Rate"    value={pct(m.pickUpRate)}   sub="dials → pick ups"     color={C.blue}  />
+              <Card label="Pitch Rate"      value={pct(m.pitchRate)}    sub="picks → proposed"     color={C.amber} />
+              <Card label="Booking Rate"    value={pct(m.bookingRate)}  sub="proposed → booked"    color={C.amber} />
+            </div>
+          </>)}
+
+          {/* ═══ WEEKLY REVIEW ═══ */}
+          {tab === "review" && (<>
+            <SL color={C.amber}>Weekly Data Room — Metrics to Review</SL>
+            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 5, overflow: "hidden" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 90px 90px 80px", padding: "8px 14px", borderBottom: `1px solid ${C.border}` }}>
+                {["Metric","Target","Who Owns","Ease"].map(h => (
+                  <span key={h} style={{ fontSize: 9, color: C.sub, textTransform: "uppercase", letterSpacing: "0.1em" }}>{h}</span>
+                ))}
+              </div>
+              {[
+                { m:"Dials / day / setter",        t:fmtD(D(PS(dials))),          o:"Setter",  e:"Easy",   c:C.blue  },
+                { m:"Pick-Up Rate",                t:pct(s.pickUpRate),            o:"Setter",  e:"Easy",   c:C.blue  },
+                { m:"Pitch Rate",                  t:pct(s.pitchRate),             o:"Setter",  e:"Medium", c:C.blue  },
+                { m:"Booking Rate",                t:pct(s.bookingRate),           o:"Setter",  e:"Medium", c:C.amber },
+                { m:"Calls Booked / setter / day", t:fmtD(D(PS(callsBooked))),    o:"Setter",  e:"Result", c:C.amber },
+                { m:"Show Rate",                   t:pct(s.showRate),              o:"Closer",  e:"Easy",   c:C.green },
+                { m:"Offer Rate",                  t:pct(s.offerRate),             o:"Closer",  e:"Medium", c:C.green },
+                { m:"ACV",                         t:$(s.acv),                     o:"Closer",  e:"Medium", c:C.amber },
+                { m:"Close Rate",                  t:pct(s.closeRate),             o:"Closer",  e:"Hard",   c:C.red   },
+                { m:"Closes / closer / day",       t:fmtD(D(PC(closes))),          o:"Closer",  e:"Result", c:C.amber },
+                { m:"Cash Revenue",                t:$(s.revenueTarget),           o:"Team",    e:"Result", c:C.amber },
+              ].map((row, i, arr) => (
+                <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 90px 90px 80px", padding: "9px 14px",
+                  borderBottom: i < arr.length - 1 ? `1px solid ${C.border}` : "none", alignItems: "center" }}>
+                  <span style={{ fontSize: 11, color: C.text }}>{row.m}</span>
+                  <span style={{ fontSize: 13, fontFamily: "'Bebas Neue', cursive", color: row.c }}>{row.t}</span>
+                  <span style={{ fontSize: 10, color: C.sub }}>{row.o}</span>
+                  <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 3, display: "inline-block", width: "fit-content",
+                    background: row.e==="Hard"?"#1a0808":row.e==="Easy"?"#071208":row.e==="Result"?"#120e00":"#0f0f0f",
+                    color: row.e==="Hard"?C.red:row.e==="Easy"?C.green:row.e==="Result"?C.amber:C.sub }}>
+                    {row.e}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <SL color={C.red}>Lever Selector — What's Off Track This Week?</SL>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7, marginBottom: 14 }}>
+              {LEVERS.map(lev => (
+                <button key={lev.key} className="lb" onClick={() => toggleL(lev.key)}
+                  style={{ color: levers.includes(lev.key) ? lev.color : C.sub,
+                    borderColor: levers.includes(lev.key) ? lev.color : C.border,
+                    background: levers.includes(lev.key) ? `${lev.color}0d` : "none" }}>
+                  <span style={{ marginRight: 6 }}>{levers.includes(lev.key) ? "✓" : "○"}</span>{lev.label}
+                </button>
+              ))}
+            </div>
+            {levers.length > 0 && (
+              <div style={{ display: "grid", gap: 7 }}>
+                {LEVERS.filter(l => levers.includes(l.key)).map(lev => (
+                  <div key={lev.key} style={{ background: C.surface, border: `1px solid ${C.border}`,
+                    borderLeft: `3px solid ${lev.color}`, borderRadius: 5, padding: 13 }}>
+                    <div style={{ fontSize: 9, color: lev.color, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 5 }}>
+                      This Week → {lev.label}
+                    </div>
+                    <div style={{ fontSize: 12, color: C.text, lineHeight: 1.7 }}>{lev.tip}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {levers.length === 0 && (
+              <div style={{ fontSize: 11, color: C.muted, textAlign: "center", padding: 20 }}>
+                Select what's off track this week to get targeted actions.
+              </div>
+            )}
+          </>)}
+
+        </div>
+      </div>
+    </div>
+  );
+}
